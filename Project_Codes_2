@@ -1,0 +1,108 @@
+import boto3
+import os
+from botocore.exceptions import ClientError
+
+s3 = boto3.client("s3")
+sns = boto3.client("sns")
+
+SNS_TOPIC = os.environ["SNS_TOPIC_ARN"]
+
+
+def check_public_access_block(bucket):
+    """
+    Returns True if Block Public Access is fully enabled.
+    """
+    try:
+        response = s3.get_public_access_block(Bucket=bucket)
+
+        config = response["PublicAccessBlockConfiguration"]
+
+        return (
+            config.get("BlockPublicAcls", False)
+            and config.get("IgnorePublicAcls", False)
+            and config.get("BlockPublicPolicy", False)
+            and config.get("RestrictPublicBuckets", False)
+        )
+
+    except ClientError:
+        # No Block Public Access configuration
+        return False
+
+
+def check_policy_status(bucket):
+    try:
+        response = s3.get_bucket_policy_status(Bucket=bucket)
+        return response["PolicyStatus"]["IsPublic"]
+
+    except ClientError:
+        return False
+
+
+def check_acl(bucket):
+    try:
+        acl = s3.get_bucket_acl(Bucket=bucket)
+
+        for grant in acl["Grants"]:
+            grantee = grant.get("Grantee", {})
+
+            if grantee.get("Type") == "Group":
+                uri = grantee.get("URI", "")
+
+                if (
+                    "AllUsers" in uri
+                    or "AuthenticatedUsers" in uri
+                ):
+                    return True
+
+        return False
+
+    except ClientError:
+        return False
+
+
+def lambda_handler(event, context):
+
+    buckets = s3.list_buckets()["Buckets"]
+
+    public_buckets = []
+
+    for bucket in buckets:
+
+        name = bucket["Name"]
+
+        block_enabled = check_public_access_block(name)
+        policy_public = check_policy_status(name)
+        acl_public = check_acl(name)
+
+        print(
+            f"{name} | "
+            f"Block={block_enabled} "
+            f"Policy={policy_public} "
+            f"ACL={acl_public}"
+        )
+
+        if (not block_enabled) or policy_public or acl_public:
+            public_buckets.append(name)
+
+    if public_buckets:
+
+        message = (
+            "The following S3 buckets require attention:\n\n"
+            + "\n".join(public_buckets)
+        )
+
+        sns.publish(
+            TopicArn=SNS_TOPIC,
+            Subject="S3 Public Bucket Alert",
+            Message=message
+        )
+
+        print("SNS notification sent.")
+
+    else:
+        print("No public buckets detected.")
+
+    return {
+        "CheckedBuckets": len(buckets),
+        "PublicBuckets": public_buckets
+    }
