@@ -1,1 +1,52 @@
+import boto3
+from datetime import date
 
+ce = boto3.client("ce")
+sns = boto3.client("sns")
+
+SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:476140238993::aws-cost-alert-topic"
+
+THRESHOLD = 50.00
+
+
+def lambda_handler(event, context):
+
+    today = date.today()
+
+    start = today.replace(day=1).strftime("%Y-%m-%d")
+    end = today.strftime("%Y-%m-%d")
+
+    response = ce.get_cost_and_usage(
+        TimePeriod={
+            "Start": start,
+            "End": end
+        },
+        Granularity="MONTHLY",
+        Metrics=["UnblendedCost"]
+    )
+
+    amount = float(
+        response["ResultsByTime"][0]["Total"]["UnblendedCost"]["Amount"]
+    )
+
+    print(f"Current Month-to-Date Spend: ${amount:.2f}")
+
+    if amount > THRESHOLD:$50
+
+        message = (
+            f"AWS Cost Alert\n\n"
+            f"Current Month-to-Date Spend: ${amount:.2f}\n"
+            f"Threshold: ${THRESHOLD:.2f}"
+        )
+
+        sns.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject="AWS Cost Threshold Exceeded",
+            Message=message
+        )
+
+        print("SNS alert sent.")
+
+    return {
+        "statusCode": 200,
+        "current_spend": amount
