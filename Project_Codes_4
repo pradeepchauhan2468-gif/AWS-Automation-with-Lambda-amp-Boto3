@@ -1,0 +1,69 @@
+import boto3
+from datetime import datetime, timezone, timedelta
+
+ec2 = boto3.client("ec2")
+
+VOLUME_ID = "vol-0a2085345dd08e181"
+
+TAG_KEY = "CreatedBy"
+TAG_VALUE = "Lambda-Backup"
+
+RETENTION_DAYS = 0
+
+
+def lambda_handler(event, context):
+
+    # Create snapshot
+    response = ec2.create_snapshot(
+        VolumeId=VOLUME_ID,
+        Description="Automated Lambda Backup"
+    )
+
+    snapshot_id = response["SnapshotId"]
+
+    # Tag snapshot
+    ec2.create_tags(
+        Resources=[snapshot_id],
+        Tags=[
+            {"Key": TAG_KEY, "Value": TAG_VALUE},
+            {"Key": "Name", "Value": "Lambda Backup"}
+        ]
+    )
+
+    print(f"Created Snapshot: {snapshot_id}")
+
+    deleted_snapshots = []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+
+    paginator = ec2.get_paginator("describe_snapshots")
+
+    for page in paginator.paginate(
+        OwnerIds=["self"],
+        Filters=[
+            {
+                "Name": f"tag:{TAG_KEY}",
+                "Values": [TAG_VALUE]
+            }
+        ]
+    ):
+
+        for snapshot in page["Snapshots"]:
+
+            if snapshot["SnapshotId"] == snapshot_id:
+                continue
+
+            if snapshot["StartTime"] < cutoff:
+
+                ec2.delete_snapshot(
+                    SnapshotId=snapshot["SnapshotId"]
+                )
+
+                print(f"Deleted Snapshot: {snapshot['SnapshotId']}")
+                deleted_snapshots.append(snapshot["SnapshotId"])
+
+    return {
+        "statusCode": 200,
+        "created_snapshot": snapshot_id,
+        "deleted_snapshots": deleted_snapshots
+    }
